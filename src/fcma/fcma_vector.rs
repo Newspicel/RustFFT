@@ -197,6 +197,10 @@ impl SimdVector for FcmaVector64 {
         unsafe { Self(vnegq_f64(a.0)) }
     }
     #[inline(always)]
+    unsafe fn swap_complex(a: Self) -> Self {
+        unsafe { Self(vextq_f64(a.0, a.0, 1)) }
+    }
+    #[inline(always)]
     unsafe fn add(a: Self, b: Self) -> Self {
         unsafe { Self(vaddq_f64(a.0, b.0)) }
     }
@@ -351,6 +355,10 @@ impl SimdVector for FcmaVector32 {
     #[inline(always)]
     unsafe fn neg(a: Self) -> Self {
         unsafe { Self(vnegq_f32(a.0)) }
+    }
+    #[inline(always)]
+    unsafe fn swap_complex(a: Self) -> Self {
+        unsafe { Self(vrev64q_f32(a.0)) }
     }
     #[inline(always)]
     unsafe fn add(a: Self, b: Self) -> Self {
