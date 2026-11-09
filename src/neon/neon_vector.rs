@@ -184,6 +184,37 @@ impl SimdVector for float64x2_t {
         unsafe { vnegq_f64(a) }
     }
     #[inline(always)]
+    unsafe fn swap_complex(a: Self) -> Self {
+        unsafe { vextq_f64(a, a, 1) }
+    }
+    #[cfg(target_feature = "fcma")]
+    #[inline(always)]
+    unsafe fn rotate_add<const FORWARD: bool>(a: Self, b: Self, _rotation: Self) -> Self {
+        unsafe {
+            if FORWARD {
+                fcma::fcadd::<270, Self>(a, b)
+            } else {
+                fcma::fcadd::<90, Self>(a, b)
+            }
+        }
+    }
+    #[cfg(target_feature = "fcma")]
+    #[inline(always)]
+    unsafe fn rotate_sub<const FORWARD: bool>(a: Self, b: Self, _rotation: Self) -> Self {
+        unsafe {
+            if FORWARD {
+                fcma::fcadd::<90, Self>(a, b)
+            } else {
+                fcma::fcadd::<270, Self>(a, b)
+            }
+        }
+    }
+    #[cfg(target_feature = "fcma")]
+    #[inline(always)]
+    unsafe fn mul_twiddle(value: Self, _re: Self, _im: Self, twiddle: Self) -> Self {
+        unsafe { fcma::mul::<Self>(twiddle, value) }
+    }
+    #[inline(always)]
     unsafe fn add(a: Self, b: Self) -> Self {
         unsafe { vaddq_f64(a, b) }
     }
@@ -339,6 +370,37 @@ impl SimdVector for float32x4_t {
         unsafe { vnegq_f32(a) }
     }
     #[inline(always)]
+    unsafe fn swap_complex(a: Self) -> Self {
+        unsafe { vrev64q_f32(a) }
+    }
+    #[cfg(target_feature = "fcma")]
+    #[inline(always)]
+    unsafe fn rotate_add<const FORWARD: bool>(a: Self, b: Self, _rotation: Self) -> Self {
+        unsafe {
+            if FORWARD {
+                fcma::fcadd::<270, Self>(a, b)
+            } else {
+                fcma::fcadd::<90, Self>(a, b)
+            }
+        }
+    }
+    #[cfg(target_feature = "fcma")]
+    #[inline(always)]
+    unsafe fn rotate_sub<const FORWARD: bool>(a: Self, b: Self, _rotation: Self) -> Self {
+        unsafe {
+            if FORWARD {
+                fcma::fcadd::<90, Self>(a, b)
+            } else {
+                fcma::fcadd::<270, Self>(a, b)
+            }
+        }
+    }
+    #[cfg(target_feature = "fcma")]
+    #[inline(always)]
+    unsafe fn mul_twiddle(value: Self, _re: Self, _im: Self, twiddle: Self) -> Self {
+        unsafe { fcma::mul::<Self>(twiddle, value) }
+    }
+    #[inline(always)]
     unsafe fn add(a: Self, b: Self) -> Self {
         unsafe { vaddq_f32(a, b) }
     }
@@ -486,5 +548,89 @@ mod unit_tests {
             assert_eq!(val3, values[2]);
             assert_eq!(val4, values[3]);
         }
+    }
+}
+
+/// Single FCMA instructions through inline assembly, as their intrinsics are unstable.
+#[cfg(target_feature = "fcma")]
+mod fcma {
+    use core::arch::aarch64::*;
+    use core::arch::asm;
+
+    pub trait Arrangement: Copy {
+        unsafe fn fcadd90(a: Self, b: Self) -> Self;
+        unsafe fn fcadd270(a: Self, b: Self) -> Self;
+        unsafe fn fcmla0(acc: Self, a: Self, b: Self) -> Self;
+        unsafe fn fcmla90(acc: Self, a: Self, b: Self) -> Self;
+        unsafe fn zero() -> Self;
+    }
+
+    macro_rules! arrangement {
+        ($ty:ty, $suffix:literal, $zero:expr) => {
+            impl Arrangement for $ty {
+                #[inline(always)]
+                unsafe fn fcadd90(a: Self, b: Self) -> Self {
+                    let out: Self;
+                    unsafe {
+                        asm!(concat!("fcadd {d:v}.", $suffix, ", {a:v}.", $suffix, ", {b:v}.", $suffix, ", #90"),
+                            d = lateout(vreg) out, a = in(vreg) a, b = in(vreg) b,
+                            options(pure, nomem, nostack, preserves_flags));
+                    }
+                    out
+                }
+                #[inline(always)]
+                unsafe fn fcadd270(a: Self, b: Self) -> Self {
+                    let out: Self;
+                    unsafe {
+                        asm!(concat!("fcadd {d:v}.", $suffix, ", {a:v}.", $suffix, ", {b:v}.", $suffix, ", #270"),
+                            d = lateout(vreg) out, a = in(vreg) a, b = in(vreg) b,
+                            options(pure, nomem, nostack, preserves_flags));
+                    }
+                    out
+                }
+                #[inline(always)]
+                unsafe fn fcmla0(mut acc: Self, a: Self, b: Self) -> Self {
+                    unsafe {
+                        asm!(concat!("fcmla {d:v}.", $suffix, ", {a:v}.", $suffix, ", {b:v}.", $suffix, ", #0"),
+                            d = inout(vreg) acc, a = in(vreg) a, b = in(vreg) b,
+                            options(pure, nomem, nostack, preserves_flags));
+                    }
+                    acc
+                }
+                #[inline(always)]
+                unsafe fn fcmla90(mut acc: Self, a: Self, b: Self) -> Self {
+                    unsafe {
+                        asm!(concat!("fcmla {d:v}.", $suffix, ", {a:v}.", $suffix, ", {b:v}.", $suffix, ", #90"),
+                            d = inout(vreg) acc, a = in(vreg) a, b = in(vreg) b,
+                            options(pure, nomem, nostack, preserves_flags));
+                    }
+                    acc
+                }
+                #[inline(always)]
+                unsafe fn zero() -> Self {
+                    unsafe { $zero }
+                }
+            }
+        };
+    }
+    arrangement!(float32x4_t, "4s", vdupq_n_f32(0.0));
+    arrangement!(float64x2_t, "2d", vdupq_n_f64(0.0));
+
+    /// `a + i * b` for `ROTATION` 90, `a - i * b` for 270.
+    #[inline(always)]
+    pub unsafe fn fcadd<const ROTATION: u32, V: Arrangement>(a: V, b: V) -> V {
+        unsafe {
+            if ROTATION == 90 {
+                V::fcadd90(a, b)
+            } else {
+                V::fcadd270(a, b)
+            }
+        }
+    }
+
+    /// The complex product `a * b`.
+    #[inline(always)]
+    pub unsafe fn mul<V: Arrangement>(a: V, b: V) -> V {
+        unsafe { V::fcmla90(V::fcmla0(V::zero(), a, b), a, b) }
     }
 }

@@ -3,6 +3,7 @@ pub mod simd_butterfly8;
 
 pub mod simd_radix4;
 pub mod simd_radixn;
+pub mod simd_stockham;
 #[macro_use]
 pub mod simd_vector;
 pub mod parallel_fft;
